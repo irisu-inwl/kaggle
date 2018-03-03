@@ -64,12 +64,20 @@ def data_frame_processing(df: 'DataFrame') -> 'DataFrame':
 
     return df
 
-def data_read_pp(train_file_path: str, test_file_path: str, columns: list, objective_variable_name: str) -> (list, list):
+def data_frame_make(train_file_path: str, test_file_path: str, columns: list) -> 'DataFrame':
     train_df = pd.read_csv(train_file_path, header=0)
     test_df = pd.read_csv(test_file_path, header=0)
+    # TODO: deal with new comming category
     df = pd.concat([train_df, test_df])
     df = data_frame_processing(df)
     data = df[columns]
+    return data, train_df
+
+def data_read_pp2(train_file_path: str, test_file_path: str, columns: list, objective_variable_name: str) -> (list, list):
+    
+
+def data_read_pp(train_file_path: str, test_file_path: str, columns: list, objective_variable_name: str) -> (list, list):
+    data, _ = data_frame_make(train_file_path, test_file_path, columns)
     data_dammies = pd.get_dummies(data)
     data_dammies = data_dammies.dropna(subset=['Age'])
     data_dammies = data_dammies.fillna(0)
@@ -88,12 +96,7 @@ list, list, list):
     Returns:
         - (train_X, train_y, test_X) : explanatory variables, objective value
     """
-    train_df = pd.read_csv(train_file_path, header=0)
-    test_df = pd.read_csv(test_file_path, header=0)
-    # TODO: deal with new comming category
-    df = pd.concat([train_df, test_df])
-    df = data_frame_processing(df)
-    data = df[columns]
+    data, train_df = data_frame_make(train_file_path, test_file_path, columns)
     train_len = len(train_df.index)
 
     # one-hot encoding
