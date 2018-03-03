@@ -29,7 +29,7 @@ pp_columns = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Ca
 pp2_columns = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone']
 objective_variable_name = 'Survived'
 pp_objective_variable_name = 'Age'
-pp_objective_variable_name = 'Cabin'
+pp2_objective_variable_name = 'Cabin'
 id_name = 'PassengerId'
 
 def data_frame_processing(df: 'DataFrame') -> 'DataFrame':
