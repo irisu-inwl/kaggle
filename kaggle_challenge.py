@@ -6,8 +6,7 @@ from collections import Counter
 
 import numpy as np
 from sklearn.svm import SVC, SVR
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.grid_search import GridSearchCV
 from sklearn.feature_selection import SelectFromModel
@@ -17,75 +16,139 @@ from metric_learn import LMNN, ITML_Supervised, LSML_Supervised, SDML_Supervised
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import LabelEncoder
+
 import xgboost as xgb
+from ethnicolr import pred_census_ln, pred_wiki_ln
 
 train_data_path = './titanic/train.csv'
 test_data_path = './titanic/test.csv'
 save_path = './titanic/{}.bin'
 output_path = './titanic/submit_data.csv'
 alphabet_list = 'a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z'.split(',')
-columns = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone'] + alphabet_list
-pp_columns = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone'] + alphabet_list
-pp2_columns = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone']
+columns = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone', 'NameLength', 'TicketPre', 'TicketNum', 'Race', 'Country'] + alphabet_list
+pp_columns_age = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Title', 'Fare', 'FamilySize', 'IsAlone', 'NameLength', 'Race', 'Country'] + alphabet_list
+pp_columns_cabin = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone', 'TicketPre', 'TicketNum', 'Race']
+categorical_column = [columns.index(name) - 1 for name in ['Sex', 'Embarked', 'Title', 'Cabin', 'TicketPre']]
 objective_variable_name = 'Survived'
-pp_objective_variable_name = 'Age'
-pp2_objective_variable_name = 'Cabin'
+pp_objective_variable_name_age = 'Age'
+pp_objective_variable_name_cabin = 'Cabin'
 id_name = 'PassengerId'
 
 def data_frame_processing(df: 'DataFrame') -> 'DataFrame':
     df['Cabin'] = df['Cabin'].map(lambda x: str(x)[0] if x else x)
     # name process
-    df['Title'] = df.Name.str.extract(' ([A-Za-z]+)\.', expand=False)
+    df['Title'] = df.Name.str.extract(r' ([A-Za-z]+)\.', expand=False)
     df['Title'] = df['Title'].replace(
         ['Lady', 'Countess', 'Capt', 'Col', 'Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona'], 'Rare')
     df['Title'] = df['Title'].replace('Mlle', 'Miss')
     df['Title'] = df['Title'].replace('Ms', 'Miss')
     df['Title'] = df['Title'].replace('Mme', 'Mrs')
+
     # fitting Name to category distribution of alphabet
     prep_name_alphabet_category = df.Name.str \
-        .extract('([A-Za-z\(\)]+)?,\s[A-Za-z]+\.([\(\)\sA-Za-z]+)', expand=False) \
+        .extract(r'([A-Za-z\(\)]+)?,\s[A-Za-z]+\.([\(\)\sA-Za-z]+)', expand=False) \
         .apply(lambda x: '{0}{1}'.format(x[0], x[1]).lower(), axis=1) \
-        .str.replace('[\s\(\)]', '').apply(lambda x: dict(Counter(x)))
+        .str.replace(r'[\s\(\)]', '').apply(lambda x: dict(Counter(x)))
     prep_name_alphabet_category = pd.DataFrame(list(prep_name_alphabet_category),
                                                index=prep_name_alphabet_category.index)
     prep_name_alphabet_category = prep_name_alphabet_category.fillna(0)
     df = pd.concat([df, prep_name_alphabet_category], axis=1)
+
+    # name length process
+    df['NameLength'] = df.Name.apply(lambda x: len(x)).astype(int)
+
     # family size process
     df['FamilySize'] = df['SibSp'] + df['Parch'] + 1
     df['IsAlone'] = 1
     df['IsAlone'].loc[df['FamilySize'] > 1] = 0
+
     # fare process
     df['Fare'] = df['Fare'].fillna(df['Fare'].median())
-    df.loc[df['Fare'] <= 7.91, 'Fare'] = 0
-    df.loc[(df['Fare'] > 7.91) & (df['Fare'] <= 14.454), 'Fare'] = 1
-    df.loc[(df['Fare'] > 14.454) & (df['Fare'] <= 31), 'Fare'] = 2
-    df.loc[df['Fare'] > 31, 'Fare'] = 3
-    df['Fare'] = df['Fare'].astype(int)
+    # df.loc[df['Fare'] <= 7.91, 'Fare'] = 0
+    # df.loc[(df['Fare'] > 7.91) & (df['Fare'] <= 14.454), 'Fare'] = 1
+    # df.loc[(df['Fare'] > 14.454) & (df['Fare'] <= 31), 'Fare'] = 2
+    # df.loc[df['Fare'] > 31, 'Fare'] = 3
+    # df['Fare'] = df['Fare'].astype(int)
+    df['Fare'] = df['Fare']+1
+    df['Fare'] = df['Fare'].apply(np.log)
+    df['Fare'] = df['Fare']
+
+    # Ticket Pre and Number process
+    TkPre_TkNum = df.Ticket.str.extract(r'([A-Za-z/0-9\.]+)?\s[A-Za-z\s]*([0-9]+)?', expand=False)
+    TkNum = df.Ticket.str.extract(r'([0-9]+)?', expand=False)
+    TkPre_TkNum.loc[TkNum.isnull() == False,1] = TkNum[TkNum.isnull() == False]
+    TkPre_TkNum.loc[:, 0] = TkPre_TkNum.loc[:, 0].str.replace(r'\.', '')
+    TkPre_TkNum.loc[:, 0][df.Ticket == 'LINE'] = 'LINE'
+    TkPre_TkNum.loc[:, 0] = TkPre_TkNum.loc[:, 0].fillna('n')
+    df['TicketPre'] = TkPre_TkNum.loc[:, 0]
+    TkPre_TkNum.loc[:, 1] = TkPre_TkNum.loc[:, 1].fillna(0).astype(float)
+    df['TicketNum'] = TkPre_TkNum.loc[:, 1]
+
+    # country and race predict
+    name_series = df.Name.str.extract(r'([A-Za-z\(\)]+)?,\s[A-Za-z]+\.\s[\(]*([a-zA-Z]+)?')
+    name_df = pd.DataFrame(name_series)
+    name_df = name_df.rename(columns={0:'last_name',1:'first_name'})
+    census_df = pred_census_ln(name_df, 'first_name')
+    df['Race'] = census_df['race']
+    wiki_ln_df = pred_wiki_ln(name_df, 'last_name')
+    df['Country'] = wiki_ln_df.race.str.extract(r'[a-zA-Z,]*[a-zA-Z]+,([a-zA-Z]+)?')
 
     return df
 
-def data_frame_make(train_file_path: str, test_file_path: str, columns: list) -> 'DataFrame':
+def data_frame_make(train_file_path: str, test_file_path: str) -> 'DataFrame':
     train_df = pd.read_csv(train_file_path, header=0)
     test_df = pd.read_csv(test_file_path, header=0)
     # TODO: deal with new comming category
     df = pd.concat([train_df, test_df])
-    df = data_frame_processing(df)
-    data = df[columns]
-    return data, train_df
+    return df, train_df
 
-def data_read_pp2(train_file_path: str, test_file_path: str, columns: list, objective_variable_name: str) -> (list, list):
+def preprocessing(df_source: 'DataFrame', columns: list, objective_variable_name: str, ml_name: str) -> 'DataFrame':
+    # for preprocessing supervised learning
+    data = df_source.copy()
+
+    if objective_variable_name == 'Cabin':
+        data['Age'] = data['Age'].fillna(data['Age'].median())
+
+    indexer_null = data[objective_variable_name].isnull()
+    indexer_not_null = (data[objective_variable_name].isnull() == False)
+
+    data = data_frame_processing(data)
+    data = data[columns]
+
+    # 削る前にtrain_yを入れておく
+    train_y = data[indexer_not_null][objective_variable_name].values
+
+    # drop, onehot encoding, fill missing_value
+    df_drop = data.drop([objective_variable_name, 'Survived'], axis=1)
+    df_drop = pd.get_dummies(df_drop)
+    df_drop = df_drop.fillna(0)
+
+    train_X = df_drop[indexer_not_null].values
+
+    # fitting classifier
+
+    classifier_ml = MLPipe(ml_name, '_{0}_pre'.format(len(columns)))
+    classifier_ml.fit_model(train_X, train_y)
+    classifier = classifier_ml.get_model()
     
+    # predict classifier
+    clf_X = df_drop[indexer_null].values
+    predicted = classifier.predict(clf_X)
+    df_source.loc[indexer_null, objective_variable_name] = predicted
 
-def data_read_pp(train_file_path: str, test_file_path: str, columns: list, objective_variable_name: str) -> (list, list):
-    data, _ = data_frame_make(train_file_path, test_file_path, columns)
-    data_dammies = pd.get_dummies(data)
-    data_dammies = data_dammies.dropna(subset=['Age'])
-    data_dammies = data_dammies.fillna(0)
-    train_X = data_dammies.drop([objective_variable_name], axis=1).values
-    train_y = data_dammies[[objective_variable_name]].values[:, 0]
-    return train_X, train_y
+    return df_source
 
-def data_read(train_file_path: str, test_file_path: str, columns: list, objective_variable_name: str, regressor: dict) -> (
+def get_categorical_dict(df:'DataFrame' ,columns: list, categorical_column: list) -> (dict, 'DataFrame'):
+    categorical_names = {}
+    for feature in categorical_column:
+        le = LabelEncoder()
+        le.fit(df[columns[feature+1]].astype(str))
+        df[columns[feature+1]] = le.transform(df[columns[feature+1]].astype(str))
+        categorical_names[feature] = le.classes_
+    return categorical_names, df
+
+def data_read(df: 'DataFrame', train_df: 'DataFrame', columns: list, objective_variable_name: str) -> (
 list, list, list):
     """
     data set read via pandas
@@ -96,20 +159,21 @@ list, list, list):
     Returns:
         - (train_X, train_y, test_X) : explanatory variables, objective value
     """
-    data, train_df = data_frame_make(train_file_path, test_file_path, columns)
-    train_len = len(train_df.index)
+    train_len = len(train_df.index)    
 
+    # cabin classifier
+    #  preleminaire
+
+    data = data_frame_processing(df)
+    data = data[columns]
+    
     # one-hot encoding
     data_dammies = pd.get_dummies(data)
 
-    # regressor subst
-    indexer = data_dammies['Age'].isnull()
-    data_dammies = data_dammies.fillna(0)
-    predicted = regressor.predict(data_dammies.drop(['Age', 'Survived'], axis=1).loc[indexer, :])
-    data_dammies.loc[indexer, 'Age'] = predicted
-
     train_dammies = data_dammies[:train_len]
     test_dammies = data_dammies[train_len:]
+
+    data_dammies = data_dammies.fillna(0)
 
     # vectorize
     train_X = train_dammies.drop([objective_variable_name], axis=1).values
@@ -117,6 +181,16 @@ list, list, list):
     test_X = test_dammies.drop([objective_variable_name], axis=1).values
 
     return train_X, train_y, test_X
+
+def data_read_for_lime(df: 'DataFrame', train_df: 'DataFrame', columns: list, categorical_column: list, objective_variable_name: str) -> (dict, list):
+    train_len = len(train_df.index)
+
+    categorical_names, data = get_categorical_dict(df, columns, categorical_column)
+    
+    train_data = data[:train_len]
+
+    train_X = train_data.drop([objective_variable_name], axis=1).values
+    return categorical_names, train_X
 
 def output_submit_data(file_path: str, test_file_path: str, test_y: list, id_name: str, objective_variable_name: str):
     test_df = pd.read_csv(test_file_path, header=0)
@@ -159,8 +233,8 @@ class MLPipe:
                 # 'feature_selection__estimator': [RandomForestClassifier(n_estimators=100, random_state=42), SVC(C=1000), KNeighborsClassifier()],
                 'classifier': [SVC()],
                 'classifier__kernel': ['rbf'],
-                'classifier__C': [0.001, 0.01, 0.1, 1, 10, 100],
-                'classifier__gamma': [0.001, 0.01, 0.1, 1, 10, 100]
+                'classifier__C': [0.001, 0.01, 0.1, 1],
+                'classifier__gamma': [0.001, 0.01, 0.1, 1]
             },
             {
                 'scaling': [StandardScaler(), None],
@@ -168,7 +242,27 @@ class MLPipe:
                 'feature_selection': [SelectFromModel(RandomForestClassifier(n_estimators=100, random_state=42), threshold='median'), None],
                 'classifier': [SVC()],
                 'classifier__kernel': ['linear'],
-                'classifier__C': [0.001, 0.01, 0.1, 1, 10, 100],
+                'classifier__C': [0.001, 0.01, 0.1, 1],
+            }
+        ],
+        'multiSVC': [
+            {
+                'scaling': [StandardScaler(), None],
+                'metric_learning': [None],
+                'feature_selection': [SelectFromModel(RandomForestClassifier(n_estimators=100, random_state=42), threshold='median'), None],
+                # 'feature_selection__estimator': [RandomForestClassifier(n_estimators=100, random_state=42), SVC(C=1000), KNeighborsClassifier()],
+                'classifier': [SVC()],
+                'classifier__kernel': ['rbf'],
+                'classifier__C': [0.001, 0.01, 0.1, 1],
+                'classifier__gamma': [0.001, 0.01, 0.1, 1]
+            },
+            {
+                'scaling': [StandardScaler(), None],
+                'metric_learning': [None],
+                'feature_selection': [SelectFromModel(RandomForestClassifier(n_estimators=100, random_state=42), threshold='median'), None],
+                'classifier': [SVC()],
+                'classifier__kernel': ['linear'],
+                'classifier__C': [0.001, 0.01, 0.1, 1, 10],
             }
         ],
         'rfc': [
@@ -176,6 +270,18 @@ class MLPipe:
                 #'scaling': [StandardScaler(), None],
                 'scaling': [None],
                 'metric_learning': [None,  LMNN()],
+                'feature_selection': [SelectFromModel(RandomForestClassifier(n_estimators=100, random_state=42), threshold='median'), None],
+                'classifier': [RandomForestClassifier()],
+                'classifier__n_estimators': [10, 25, 50, 75, 100],
+                'classifier__max_depth': [None, 5, 10, 25],
+                'classifier__min_samples_split': [5, 10, 15]
+            }
+        ],
+        'multi_rfc': [
+            {
+                #'scaling': [StandardScaler(), None],
+                'scaling': [None],
+                'metric_learning': [None],
                 'feature_selection': [SelectFromModel(RandomForestClassifier(n_estimators=100, random_state=42), threshold='median'), None],
                 'classifier': [RandomForestClassifier()],
                 'classifier__n_estimators': [10, 25, 50, 75, 100],
@@ -227,25 +333,51 @@ class MLPipe:
         ],
         'xgb': [
             {
-                'scaling': [StandardScaler()],#, None],
+                'scaling': [StandardScaler()],
                 'metric_learning': [None],#, LMNN(), ITML_Supervised(num_constraints=200)],
                 'feature_selection': [None],
                 'classifier': [xgb.XGBClassifier()],
                 'classifier__n_estimators': [500, 1000, 2000],
-                'classifier__max_depth': [4, 6, 8, 10],
-                'classifier__min_child_weight': [1, 2, 3],
-                'classifier__gamma': [0.4, 0.6, 0.8, 0.9, 1],
-                'classifier__subsample': [0.4, 0.6, 0.8, 1.0],
-                'classifier__colsample_bytree': [0.4, 0.6, 0.8, 1.0]
+                'classifier__max_depth': [3, 4, 5, 6],
+                'classifier__min_child_weight': [1, 2],
+                'classifier__gamma': [0.35, 0.2, 0.5, 0.6, 0.8],
+                'classifier__subsample': [0.55, 0.35, 0.8, 1.0],
+                'classifier__colsample_bytree': [0.2, 0.4, 0.6, 0.8]
+            }
+        ],
+        'multi_xgb': [
+            {
+                'scaling': [StandardScaler()],
+                'metric_learning': [None],#, LMNN(), ITML_Supervised(num_constraints=200)],
+                'feature_selection': [SelectFromModel(xgb.XGBClassifier(n_estimators=2000), threshold='median')],
+                'classifier': [xgb.XGBClassifier()],
+                'classifier__n_estimators': [1000, 2000],
+                'classifier__max_depth': [3, 4],
+                'classifier__min_child_weight': [1],
+                'classifier__gamma': [0.35, 0.2, 0.5],
+                'classifier__subsample': [0.55, 0.35, 0.75],
+                'classifier__colsample_bytree': [0.2, 0.4, 0.6],
+                'classifier__objective': ['multi:softprob']
+            }
+        ],
+        'SVR': [
+            {
+                'scaling': [StandardScaler(), None],
+                'metric_learning': [None],
+                'feature_selection': [SelectFromModel(RandomForestRegressor(n_estimators=100, random_state=42), threshold='median'), None],
+                'classifier': [SVR()],
+                'classifier__kernel': ['rbf'],
+                'classifier__C': [0.001, 0.01, 0.1, 1, 10, 100],
+                'classifier__gamma': [0.001, 0.01, 0.1, 1, 10, 100]
             }
         ]
     }
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, prefix: str = ''):
         print('model_name: %s' % model_name)
         self._model_name = model_name
         self._param_grid = MLPipe.feature_selection_param_grid[model_name]
-        self._save_path = MLPipe.save_path.format(model_name)
+        self._save_path = MLPipe.save_path.format(model_name+prefix)
         self._save_best_path = self._save_path + '-best'
         self._model = None
         self._pipe = MLPipe.pipe
@@ -253,7 +385,6 @@ class MLPipe:
     def fit_model(self, train_X: list, train_y: list):
         model = load_model(self._save_path)
         if not model:
-            # create model, if not loading file
             grid_search = GridSearchCV(self._pipe, self._param_grid, cv=5, n_jobs=-1)
             grid_search.fit(train_X, train_y)
             save_model(self._save_path, grid_search)
@@ -289,141 +420,32 @@ class MLPipe:
 
         return list(ret_index.astype(int))
 
-class MachineLearning:
-    algorithms = {
-        'SVC': {
-            'param_grid': [  # 'linear', 'rbf', 'poly', 'sigmoid'
-                {
-                    'kernel': ['linear'],
-                    'C': [0.001, 0.01, 0.1, 1, 10, 100]
-                },
-                {
-                    'kernel': ['rbf'],
-                    'C': [0.001, 0.01, 0.1, 1, 10, 100],
-                    'gamma': [0.001, 0.01, 0.1, 1, 10, 100]
-                },
-#                {
-#                    'kernel': ['sigmoid'],
-#                    'C': [0.001, 0.01, 0.1, 1, 10, 100],
-#                    'gamma': [0.001, 0.01, 0.1, 1, 10, 100],
-#                    'coef0': [0.001, 0.01, 0.1, 1, 10, 100]
-#                }
-            ],
-            'method': SVC()
-        },
-        'rfc': {
-            'param_grid': {
-                'n_estimators': [10, 25, 50, 75, 100],
-                'criterion': ['gini', 'entropy'],
-                'max_features': ['auto', 'sqrt', 'log2'],
-                'max_depth': [None, 2, 5, 10, 15, 25]
-            },
-            'method': RandomForestClassifier()
-        },
-        'gbc': {
-            'param_grid': {
-                'loss': ['deviance', 'exponential'],
-                'learning_rate': [0.1, 1, 10],
-                'n_estimators': [10, 50, 100],
-                'criterion': ['friedman_mse', 'mse'],
-                'max_features': ['auto', 'sqrt', 'log2'],
-                'max_depth': [None, 2, 5, 10, 15, 25]
-            },
-            'method': GradientBoostingClassifier()
-        },
-        'knn': {
-            'param_grid': {
-                'n_neighbors': [2, 3, 4, 5],
-                'algorithm': ['auto', 'ball_tree', 'kd_tree']
-            },
-            'method': KNeighborsClassifier()
-        },
-        'SVR': {
-            'param_grid': [  # 'linear', 'rbf', 'poly', 'sigmoid'
-                {
-                    'kernel': ['linear'],
-                    'C': [0.001, 0.01, 0.1, 1, 10, 100]
-                },
-                {
-                    'kernel': ['rbf'],
-                    'C': [0.001, 0.01, 0.1, 1, 10, 100],
-                    'gamma': [0.001, 0.01, 0.1, 1, 10, 100]
-                },
-#                {
-#                    'kernel': ['sigmoid'],
-#                    'C': [0.001, 0.01, 0.1, 1, 10, 100],
-#                    'gamma': [0.001, 0.01, 0.1, 1, 10, 100],
-#                    'coef0': [0.001, 0.01, 0.1, 1, 10, 100]
-#                }
-            ],
-            'method': SVR()
-        }
-    }
-    manifold_algorithms = {
-        'tsne': TSNE,
-        'Isomap': Isomap,
-        'SE': SpectralEmbedding
-    }
-
-    def __init__(self, model_name: str, manifold_name):
-        print('model_name: %s' % model_name)
-        self._model_name = model_name
-        self._algorithms = MachineLearning.algorithms[model_name]
-        self._save_path = save_path.format(self._model_name)
-        self._model = None
-        self._select = None
-        self._manifold = MachineLearning.manifold_algorithms[manifold_name]
-
-    def fit_model(self, train_X: list, train_y: list):
-        model = load_model(self._save_path)
-        if not model:
-            # create model, if not loading file
-            grid_search = GridSearchCV(self._algorithms['method'], self._algorithms['param_grid'], cv=5, n_jobs=-1)
-            grid_search.fit(train_X, train_y)
-            save_model(self._save_path, grid_search)
-            model = grid_search
-
-        print('best score: {:.2f}'.format(model.best_score_))
-        # print('best estimator \n{}'.format(model.best_estimator_))
-        self._model = model.best_estimator_
-
-    def fit_select_model(self, train_X: list, train_y: list):
-        if self._model:
-            self._select = SelectFromModel(self._model, threshold='median')
-            self._select.fit(train_X, train_y)
-            train_select_X = self._select.transform(train_X)
-            print('train_X shape:{}'.format(train_X.shape))
-            print('train_select_X shape:{}'.format(train_select_X.shape))
-            self._model.fit(train_select_X, train_y)
-            scores = cross_val_score(self._model, train_select_X, train_y, cv=5)
-            print('cv-scores: {}'.format(scores))
-            print('Average of cv-scores: {:.2f}'.format(scores.mean()))
-
-    def embeding_vector(self, X: list, n_components: int, n_neighbors: int) -> list:
-        X_embedded = self._manifold(n_components=n_components, n_neighbors=n_neighbors).fit_transform(X)
-        return X_embedded
-
-    def predict(self, test_X: list) -> list:
-        if self._select:
-            test_X = self._select.transform(test_X)
-        test_y = self._model.predict(test_X).astype(int)
-        return test_y
-
-    def get_model(self) -> dict:
-        return self._model
-
 def main():
-    train_X, train_y = data_read_pp(train_data_path, test_data_path, pp_columns, pp_objective_variable_name)
-    regressor_ml = MachineLearning('SVR', 'tsne')
-    regressor_ml.fit_model(train_X, train_y)
-    regressor = regressor_ml.get_model()
-    train_X, train_y, test_X = data_read(train_data_path, test_data_path, columns, objective_variable_name, regressor)
+    # preprocessing cabin
+    # train_X, train_y = data_read_pp2(train_data_path, test_data_path, pp2_columns, pp2_objective_variable_name)
 
-    ml = MLPipe('xgb')
-    # ml = MachineLearning('knn', 'Isomap')
+    # data read
+    df, train_df = data_frame_make(train_data_path, test_data_path)
+
+    # data preprocessing
+    print('#########################')
+    print('missing_value of Cabin filling')
+    print('#########################')
+    df = preprocessing(df, pp_columns_cabin, pp_objective_variable_name_cabin, 'multi_xgb')
+
+    print('#########################')
+    print('missing_value of Age filling')
+    print('#########################')
+    df = preprocessing(df, pp_columns_age, pp_objective_variable_name_age, 'SVR')
+
+    # print(df.isnull().sum())
+
+    # main predict
+    train_X, train_y, test_X = data_read(df, train_df, columns, objective_variable_name)
+
+    ml = MLPipe('xgb', '_{0}_main'.format(len(columns)))
 
     ml.fit_model(train_X, train_y)
-    # ml.fit_select_model(train_X, train_y)
     test_y = ml.predict(test_X)
     output_submit_data(output_path, test_data_path, test_y, id_name, objective_variable_name)
 
