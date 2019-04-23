@@ -5,10 +5,13 @@ from collections import Counter
 
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
 
 from ethnicolr import pred_census_ln, pred_wiki_ln
 
 from ml_pipeline import MLPipe
+
+from catboost import CatBoostClassifier, Pool, cv
 
 train_data_path = './titanic/train.csv'
 test_data_path = './titanic/test.csv'
@@ -16,7 +19,7 @@ save_path = './titanic/{}.bin'
 output_path = './titanic/submit_data.csv'
 alphabet_list = 'a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z'.split(',')
 grand_column = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone', 'NameLength', 'TicketPre', 'TicketNum', 'Race', 'Country'] + alphabet_list
-columns = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone', 'NameLength', 'TicketPre', 'Race', 'Country']
+columns = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone', 'NameLength', 'TicketPre', 'Race', 'Country']
 pp_columns_age = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Title', 'Fare', 'FamilySize', 'IsAlone', 'NameLength', 'Race', 'Country'] + alphabet_list
 pp_columns_cabin = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Embarked', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone', 'TicketPre', 'TicketNum', 'Race']
 categorical_column_name = ['Sex', 'Embarked', 'Title', 'Cabin', 'TicketPre', 'Race', 'Country'] 
@@ -152,9 +155,6 @@ list, list, list):
     """
     train_len = len(train_df.index)    
 
-    # cabin classifier
-    #  preleminaire
-
     data = data_frame_processing(df)
     data = data[columns]
     
@@ -192,6 +192,45 @@ def output_submit_data(file_path: str, test_file_path: str, test_y: list, id_nam
         csv_writer.writerow([id_name, objective_variable_name])
         csv_writer.writerows(zip(ids, test_y))
 
+from sklearn.metrics import accuracy_score
+
+def predict_cat(df: 'DataFrame', train_df: 'DataFrame', columns: list, objective_variable_name: str) -> list:
+    train_len = len(train_df.index)    
+
+    data = data_frame_processing(df)
+    data = data[columns]
+    data = data.fillna(0)
+
+    train_df = data[:train_len]
+    test_df = data[train_len:]
+
+    X = train_df.drop(objective_variable_name, axis=1)
+    y = train_df[objective_variable_name]
+    test_X = test_df.drop(objective_variable_name, axis=1)
+
+    X_train, X_validation, y_train, y_validation = train_test_split(X, y, train_size=0.8, random_state=1234)
+
+    model = CatBoostClassifier(iterations=5000, calc_feature_importance = True, use_best_model=True, eval_metric = 'Accuracy' )
+    model.fit(X_train, y_train, cat_features=categorical_column, eval_set=(X_validation, y_validation))
+
+    y_val_pred = model.predict(X_validation)
+    print('accuracy : %.2f' % accuracy_score(y_val_pred, y_validation))
+    # model.fit(X, y, cat_features=categorical_column)
+
+    # cv_data = cv(model.get_params(), Pool(X, label=y, cat_features=categorical_column))
+
+#    print('Best validation accuracy score: {:.2f}±{:.2f} on step {}'.format( \
+#        np.max(cv_data['Accuracy_test_avg']), \
+#        cv_data['Accuracy_test_stddev'][np.argmax(cv_data['Accuracy_test_avg'])], \
+#        np.argmax(cv_data['Accuracy_test_avg'])) \
+#    )
+
+    test_y = model.predict(test_X)
+    test_y = test_y.astype(int)
+
+    return test_y
+
+
 def main():
     # preprocessing cabin
     # train_X, train_y = data_read_pp2(train_data_path, test_data_path, pp2_columns, pp2_objective_variable_name)
@@ -213,12 +252,11 @@ def main():
     # print(df.isnull().sum())
 
     # main predict
-    train_X, train_y, test_X = data_read(df, train_df, columns, objective_variable_name)
-
-    ml = MLPipe('xgb', '_{0}_main'.format(len(columns)))
-
-    ml.fit_model(train_X, train_y)
-    test_y = ml.predict(test_X)
+#    train_X, train_y, test_X = data_read(df, train_df, columns, objective_variable_name)
+#    ml = MLPipe('catboost', '_{0}_main'.format(len(columns)))
+#    ml.fit_model(train_X, train_y)
+#    test_y = ml.predict(test_X)
+    test_y = predict_cat(df, train_df, columns, objective_variable_name)
     output_submit_data(output_path, test_data_path, test_y, id_name, objective_variable_name)
 
 if __name__ == '__main__':

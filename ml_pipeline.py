@@ -12,8 +12,13 @@ from sklearn.pipeline import Pipeline
 from sklearn.tree import DecisionTreeClassifier
 
 import xgboost as xgb
+from catboost import CatBoostClassifier
 
 from util import save_model, load_model
+
+columns = ['Survived', 'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Title', 'Cabin', 'Fare', 'FamilySize', 'IsAlone', 'NameLength', 'TicketPre', 'Race', 'Country']
+categorical_column_name = ['Sex', 'Embarked', 'Title', 'Cabin', 'TicketPre', 'Race', 'Country'] 
+categorical_column = [columns.index(name) - 1 for name in categorical_column_name if name in columns]
 
 class MLPipe:
     pipe = Pipeline([('scaling', StandardScaler()),
@@ -168,7 +173,18 @@ class MLPipe:
                 'classifier__C': [0.001, 0.01, 0.1, 1, 10, 100],
                 'classifier__gamma': [0.001, 0.01, 0.1, 1, 10, 100]
             }
-        ]
+        ],
+        'catboost': [
+            {
+                'scaling': [None],
+                'metric_learning': [None],#, LMNN(), ITML_Supervised(num_constraints=200)],
+                'feature_selection': [None],
+                'classifier': [CatBoostClassifier(calc_feature_importance = True, use_best_model=True, eval_metric = 'Accuracy')],
+                'classifier__iterations': [1000, 2000, 3000, 5000],
+                'classifier__alpha': [0.4, 0.5, 0.6],
+                'classifier__border': [0.4, 0.5, 0.6]
+            }
+        ],
     }
 
     def __init__(self, model_name: str, prefix: str = ''):
